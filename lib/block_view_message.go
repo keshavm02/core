@@ -448,8 +448,10 @@ func (bav *UtxoView) _connectPrivateMessage(
 			// txMeta.RecipientPublicKey is the GroupOwnerPublicKey in disguise
 			groupOwnerAccessPk := NewPublicKey(txMeta.RecipientPublicKey)
 			accessGroupKeyName := NewGroupKeyName(recipientAccessKeyName)
+			// Make enumeration key
+			enumerationKey := NewGroupEnumerationKey(groupOwnerAccessPk, accessGroupKeyName[:], senderAccessPk)
 			// check if sender is muted
-			attributeEntry, err := bav.GetGroupMemberAttributeEntry(groupOwnerAccessPk, accessGroupKeyName, senderAccessPk, AccessGroupMemberAttributeIsMuted)
+			attributeEntry, err := bav.GetGroupMemberAttributeEntry(enumerationKey, AccessGroupMemberAttributeIsMuted)
 			if err != nil {
 				return 0, 0, nil, errors.Wrapf(err, "_connectPrivateMessage: Problem checking if sender is muted")
 			}
@@ -810,6 +812,9 @@ func (bav *UtxoView) _connectNewMessage(
 			GroupChatMessagesKey: groupChatMessageKey,
 			MessageType:          MessageTypeGroupChat,
 		})
+	default:
+		return 0, 0, nil, errors.Wrapf(RuleErrorNewMessageInvalidMessageType,
+			"_connectNewMessage: Invalid message type: %v", txMeta.MessageType)
 	}
 
 	return totalInput, totalOutput, utxoOpsForTxn, nil
@@ -867,6 +872,8 @@ func (bav *UtxoView) _disconnectNewMessage(
 		// Delete the group chat message, there is no prev entry for messages so we don't need to re-set it.
 		currentGroupChatMessage := bav.getGroupChatMessagesIndex(prevUtxoOp.GroupChatMessagesKey)
 		bav.deleteGroupChatMessagesIndex(currentGroupChatMessage)
+	default:
+		return fmt.Errorf("_disconnectNewMessage: Unknown message type: %v", messageType)
 	}
 
 	// Now disconnect the basic transfer.
@@ -998,24 +1005,42 @@ func (bav *UtxoView) _connectUpdateMessage(
 		switch txMeta.AccessGroupAttributeOperationType {
 		case AccessGroupAttributeOperationTypeAdd:
 			// Add attribute to the message.
-			if err := bav._setDmMessageAttributeEntry(dmMessageKey, txMeta.MessageAttributeType, true, txMeta.AccessGroupMessageAttributeBytes); err != nil {
+			if err := bav._setDmMessageAttributeEntry(dmMessageKey, txMeta.MessageAttributeType,
+				NewAttributeEntry(true, txMeta.AccessGroupMessageAttributeBytes)); err != nil {
 				return 0, 0, nil, errors.Wrapf(err, "_connectUpdateMessage: "+
 					"error setting DM message attribute entry")
 			}
+			utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
+				Type:                                  OperationTypeUpdateMessage,
+				MessageType:                           MessageTypeDm,
+				DmMessageIndexKey:                     dmMessageKey,
+				PrevMessageAttributeType:              txMeta.MessageAttributeType,
+				PrevAccessGroupAttributeOperationType: AccessGroupAttributeOperationTypeAdd,
+				PrevAttributeValue:                    txMeta.AccessGroupMessageAttributeBytes,
+			})
 		case AccessGroupAttributeOperationTypeRemove:
 			// Remove attribute from the message.
-			if err := bav._setDmMessageAttributeEntry(dmMessageKey, txMeta.MessageAttributeType, false, txMeta.AccessGroupMessageAttributeBytes); err != nil {
+			if err := bav._setDmMessageAttributeEntry(dmMessageKey, txMeta.MessageAttributeType,
+				NewAttributeEntry(false, txMeta.AccessGroupMessageAttributeBytes)); err != nil {
 				return 0, 0, nil, errors.Wrapf(err, "_connectUpdateMessage: "+
 					"error setting DM message attribute entry")
 			}
+			utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
+				Type:                                  OperationTypeUpdateMessage,
+				MessageType:                           MessageTypeDm,
+				DmMessageIndexKey:                     dmMessageKey,
+				PrevMessageAttributeType:              txMeta.MessageAttributeType,
+				PrevAccessGroupAttributeOperationType: AccessGroupAttributeOperationTypeRemove,
+				PrevAttributeValue:                    txMeta.AccessGroupMessageAttributeBytes,
+			})
+		default:
+			return 0, 0, nil, errors.Wrapf(RuleErrorUpdateMessageInvalidAttributeOperationType,
+				"_connectUpdateMessage: Invalid access group attribute operation type: %v",
+				txMeta.AccessGroupAttributeOperationType)
 		}
 
 		// TODO special case for edit message attribute where we also update messageEntry in utxoView since message is edited
 
-		utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
-			Type: OperationTypeUpdateMessage,
-			// TODO add new fields to utxoOperation for updateMessage (DM)
-		})
 	case MessageTypeGroupChat:
 		var groupChatMessage *MessageEntry
 		groupChatMessageKey, err := MakeGroupChatMessageKeyFromMessageEntry(messageEntry)
@@ -1040,22 +1065,41 @@ func (bav *UtxoView) _connectUpdateMessage(
 		switch txMeta.AccessGroupAttributeOperationType {
 		case AccessGroupAttributeOperationTypeAdd:
 			// Add attribute to the message.
-			if err := bav._setGroupChatMessageAttributeEntry(groupChatMessageKey, txMeta.MessageAttributeType, true, txMeta.AccessGroupMessageAttributeBytes); err != nil {
+			if err := bav._setGroupChatMessageAttributeEntry(groupChatMessageKey, txMeta.MessageAttributeType,
+				NewAttributeEntry(true, txMeta.AccessGroupMessageAttributeBytes)); err != nil {
 				return 0, 0, nil, errors.Wrapf(err, "_connectUpdateMessage: "+
 					"error setting group chat message attribute entry")
 			}
+			utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
+				Type:                                  OperationTypeUpdateMessage,
+				MessageType:                           MessageTypeGroupChat,
+				GroupChatMessagesKey:                  groupChatMessageKey,
+				PrevMessageAttributeType:              txMeta.MessageAttributeType,
+				PrevAccessGroupAttributeOperationType: AccessGroupAttributeOperationTypeAdd,
+				PrevAttributeValue:                    txMeta.AccessGroupMessageAttributeBytes,
+			})
 		case AccessGroupAttributeOperationTypeRemove:
 			// Remove attribute from the message.
-			if err := bav._setGroupChatMessageAttributeEntry(groupChatMessageKey, txMeta.MessageAttributeType, false, txMeta.AccessGroupMessageAttributeBytes); err != nil {
+			if err := bav._setGroupChatMessageAttributeEntry(groupChatMessageKey, txMeta.MessageAttributeType,
+				NewAttributeEntry(false, txMeta.AccessGroupMessageAttributeBytes)); err != nil {
 				return 0, 0, nil, errors.Wrapf(err, "_connectUpdateMessage: "+
 					"error setting group chat message attribute entry")
 			}
+			utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
+				Type:                                  OperationTypeUpdateMessage,
+				MessageType:                           MessageTypeGroupChat,
+				GroupChatMessagesKey:                  groupChatMessageKey,
+				PrevMessageAttributeType:              txMeta.MessageAttributeType,
+				PrevAccessGroupAttributeOperationType: AccessGroupAttributeOperationTypeRemove,
+				PrevAttributeValue:                    txMeta.AccessGroupMessageAttributeBytes,
+			})
+		default:
+			return 0, 0, nil, errors.Wrapf(RuleErrorUpdateMessageInvalidAttributeOperationType,
+				"_connectUpdateMessage: Invalid attribute operation type: %v", txMeta.AccessGroupAttributeOperationType)
 		}
-
-		utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
-			Type: OperationTypeNewMessage,
-			// TODO add new fields to utxoOperation for updateMessage (group chat)
-		})
+	default:
+		return 0, 0, nil, errors.Wrapf(RuleErrorUpdateMessageInvalidMessageType,
+			"_connectUpdateMessage: Invalid message type: %v", txMeta.MessageType)
 	}
 
 	return totalInput, totalOutput, utxoOpsForTxn, nil
@@ -1065,6 +1109,112 @@ func (bav *UtxoView) _disconnectUpdateMessage(
 	operationType OperationType, currentTxn *MsgDeSoTxn, txnHash *BlockHash,
 	utxoOpsForTxn []*UtxoOperation, blockHeight uint32) error {
 
-	// TODO: Implement this.
-	return nil
+	// Verify that the last operation is an UpdateMessage operation.
+	if len(utxoOpsForTxn) == 0 {
+		return fmt.Errorf("_disconnectUpdateMessage: utxoOperations are missing")
+	}
+	prevUtxoOp := utxoOpsForTxn[len(utxoOpsForTxn)-1]
+	if prevUtxoOp.Type != OperationTypeUpdateMessage || operationType != OperationTypeUpdateMessage {
+		return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+			"OperationTypeUpdateMessage but found type %v", prevUtxoOp.Type)
+	}
+
+	txMeta := currentTxn.TxnMeta.(*UpdateMessageMetadata)
+
+	// switch case for message type
+	switch prevUtxoOp.MessageType {
+	case MessageTypeDm:
+		// Sanity checks.
+		if txMeta.MessageType != MessageTypeDm {
+			return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+				"OperationTypeUpdateMessage but found type %v", txMeta.MessageType)
+		}
+		if !reflect.DeepEqual(prevUtxoOp.PrevMessageAttributeType, txMeta.MessageAttributeType) {
+			return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+				"OperationTypeUpdateMessage but found prev message attribute type %v", prevUtxoOp.PrevMessageAttributeType)
+		}
+		if !reflect.DeepEqual(prevUtxoOp.PrevAttributeValue, txMeta.AccessGroupMessageAttributeBytes) {
+			return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+				"OperationTypeUpdateMessage but found prev attribute value %v", prevUtxoOp.PrevAttributeValue)
+		}
+		// TODO: Sanity check DmMessagesKey ?
+
+		// switch case for attribute operation type
+		switch prevUtxoOp.PrevAccessGroupAttributeOperationType {
+		case AccessGroupAttributeOperationTypeAdd:
+			// Sanity checks
+			if txMeta.AccessGroupAttributeOperationType != AccessGroupAttributeOperationTypeAdd {
+				return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+					"OperationTypeUpdateMessage but found type %v", txMeta.AccessGroupAttributeOperationType)
+			}
+
+			// Set isDeleted to true for the attribute entry.
+			if err := bav._deleteDmMessageAttributeEntry(prevUtxoOp.DmMessageIndexKey, prevUtxoOp.PrevMessageAttributeType, NewAttributeEntry(true, prevUtxoOp.PrevAttributeValue)); err != nil {
+				return errors.Wrapf(err, "_disconnectUpdateMessage: error deleting dm message attribute entry")
+			}
+		case AccessGroupAttributeOperationTypeRemove:
+			// Sanity checks
+			if txMeta.AccessGroupAttributeOperationType != AccessGroupAttributeOperationTypeRemove {
+				return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+					"OperationTypeUpdateMessage but found type %v", txMeta.AccessGroupAttributeOperationType)
+			}
+
+			// Revert to the previous attribute entry.
+			if err := bav._setDmMessageAttributeEntry(prevUtxoOp.DmMessageIndexKey, prevUtxoOp.PrevMessageAttributeType, NewAttributeEntry(true, prevUtxoOp.PrevAttributeValue)); err != nil {
+				return errors.Wrapf(err, "_disconnectUpdateMessage: error setting dm message attribute entry")
+			}
+		default:
+			return errors.Wrapf(RuleErrorUpdateMessageInvalidAttributeOperationType,
+				"_disconnectUpdateMessage: Invalid attribute operation type: %v", prevUtxoOp.PrevAccessGroupAttributeOperationType)
+		}
+	case MessageTypeGroupChat:
+		// Sanity checks.
+		if txMeta.MessageType != MessageTypeGroupChat {
+			return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+				"OperationTypeUpdateMessage but found type %v", txMeta.MessageType)
+		}
+		if !reflect.DeepEqual(prevUtxoOp.PrevMessageAttributeType, txMeta.MessageAttributeType) {
+			return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+				"OperationTypeUpdateMessage but found prev message attribute type %v", prevUtxoOp.PrevMessageAttributeType)
+		}
+		if !reflect.DeepEqual(prevUtxoOp.PrevAttributeValue, txMeta.AccessGroupMessageAttributeBytes) {
+			return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+				"OperationTypeUpdateMessage but found prev attribute value %v", prevUtxoOp.PrevAttributeValue)
+		}
+
+		// switch case for attribute operation type
+		switch prevUtxoOp.PrevAccessGroupAttributeOperationType {
+		case AccessGroupAttributeOperationTypeAdd:
+			// Sanity checks
+			if txMeta.AccessGroupAttributeOperationType != AccessGroupAttributeOperationTypeAdd {
+				return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+					"OperationTypeUpdateMessage but found type %v", txMeta.AccessGroupAttributeOperationType)
+			}
+
+			// Set isDeleted to true for the attribute entry.
+			if err := bav._deleteGroupChatMessageAttributeEntry(prevUtxoOp.GroupChatMessagesKey, prevUtxoOp.PrevMessageAttributeType, NewAttributeEntry(true, prevUtxoOp.PrevAttributeValue)); err != nil {
+				return errors.Wrapf(err, "_disconnectUpdateMessage: error deleting group chat message attribute entry")
+			}
+		case AccessGroupAttributeOperationTypeRemove:
+			// Sanity checks
+			if txMeta.AccessGroupAttributeOperationType != AccessGroupAttributeOperationTypeRemove {
+				return fmt.Errorf("_disconnectUpdateMessage: Trying to revert "+
+					"OperationTypeUpdateMessage but found type %v", txMeta.AccessGroupAttributeOperationType)
+			}
+
+			// Revert to the previous attribute entry.
+			if err := bav._setGroupChatMessageAttributeEntry(prevUtxoOp.GroupChatMessagesKey, prevUtxoOp.PrevMessageAttributeType, NewAttributeEntry(true, prevUtxoOp.PrevAttributeValue)); err != nil {
+				return errors.Wrapf(err, "_disconnectUpdateMessage: error setting group chat message attribute entry")
+			}
+		default:
+			return errors.Wrapf(RuleErrorUpdateMessageInvalidAttributeOperationType,
+				"_disconnectUpdateMessage: Invalid attribute operation type: %v", prevUtxoOp.PrevAccessGroupAttributeOperationType)
+		}
+	default:
+		return errors.Wrapf(RuleErrorUpdateMessageInvalidMessageType,
+			"_disconnectUpdateMessage: Invalid message type: %v", prevUtxoOp.MessageType)
+	}
+
+	operationIndex := len(utxoOpsForTxn) - 1
+	return bav._disconnectBasicTransfer(currentTxn, txnHash, utxoOpsForTxn[:operationIndex], blockHeight)
 }

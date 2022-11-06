@@ -114,6 +114,9 @@ const (
 	RuleErrorUpdateMessageDmMessageSenderPublicKeyDoesNotMatch        RuleError = "RuleErrorUpdateMessageDmMessageSenderPublicKeyDoesNotMatch"
 	RuleErrorUpdateMessageGroupChatMessageDoesNotExist                RuleError = "RuleErrorUpdateMessageGroupChatMessageDoesNotExist"
 	RuleErrorUpdateMessageGroupChatMessageSenderPublicKeyDoesNotMatch RuleError = "RuleErrorUpdateMessageGroupChatMessageSenderPublicKeyDoesNotMatch"
+	RuleErrorUpdateMessageInvalidMessageType                          RuleError = "RuleErrorUpdateMessageInvalidMessageType"
+	RuleErrorUpdateMessageInvalidAttributeOperationType               RuleError = "RuleErrorUpdateMessageInvalidAttributeOperationType"
+	RuleErrorNewMessageInvalidMessageType                             RuleError = "RuleErrorNewMessageInvalidMessageType"
 
 	RuleErrorFollowPubKeyLen                         RuleError = "RuleErrorFollowFollowedPubKeyLen"
 	RuleErrorFollowParsePubKeyError                  RuleError = "RuleErrorFollowParsePubKeyError"
@@ -340,6 +343,7 @@ const (
 	RuleErrorAccessGroupsBeforeBlockHeight               RuleError = "RuleErrorAccessGroupsBeforeBlockHeight"
 	RuleErrorAccessGroupAttributesInvalidAttributeHolder RuleError = "RuleErrorAccessGroupAttributesInvalidAttributeHolder"
 	RuleErrorAccessGroupAttributesOperationDenied        RuleError = "RuleErrorAccessGroupAttributesOperationDenied"
+	RuleErrorAccessGroupAttributesInvalidOperationType   RuleError = "RuleErrorAccessGroupAttributesInvalidOperationType"
 
 	// NFTs
 	RuleErrorTooManyNFTCopies                            RuleError = "RuleErrorTooManyNFTCopies"

@@ -739,8 +739,10 @@ func (bav *UtxoView) _connectAccessGroupCreate(
 					"_connectAccessGroupCreate: Can't mute a non-existent member (%v)", newlyMutedMember.GroupMemberPublicKey[:])
 			}
 
+			// Create enumeration keyfor this member.
+			enumerationKey := NewGroupEnumerationKey(existingEntry.GroupOwnerPublicKey, existingEntry.AccessGroupKeyName[:], member.GroupMemberPublicKey)
 			// Get group member attribute entry for this member.
-			attributeEntry, err := bav.GetGroupMemberAttributeEntry(existingEntry.GroupOwnerPublicKey, existingEntry.AccessGroupKeyName, newlyMutedMember.GroupMemberPublicKey, AccessGroupMemberAttributeIsMuted)
+			attributeEntry, err := bav.GetGroupMemberAttributeEntry(enumerationKey, AccessGroupMemberAttributeIsMuted)
 			if err != nil {
 				return 0, 0, nil, errors.Wrapf(err, "_connectAccessGroupCreate: Problem getting group member attribute entry")
 			}
@@ -776,8 +778,10 @@ func (bav *UtxoView) _connectAccessGroupCreate(
 					"_connectAccessGroupCreate: GroupOwner cannot mute herself (%v).", existingEntry.GroupOwnerPublicKey[:])
 			}
 
+			// Create enumeration key for this member.
+			enumerationKey := NewGroupEnumerationKey(existingEntry.GroupOwnerPublicKey, existingEntry.AccessGroupKeyName[:], newlyUnmutedMember.GroupMemberPublicKey)
 			// Get group member attribute entry for this member.
-			attributeEntry, err := bav.GetGroupMemberAttributeEntry(existingEntry.GroupOwnerPublicKey, existingEntry.AccessGroupKeyName, newlyUnmutedMember.GroupMemberPublicKey, AccessGroupMemberAttributeIsMuted)
+			attributeEntry, err := bav.GetGroupMemberAttributeEntry(enumerationKey, AccessGroupMemberAttributeIsMuted)
 			if err != nil {
 				return 0, 0, nil, errors.Wrapf(err, "_connectAccessGroupCreate: Problem getting group member attribute entry")
 			}
@@ -839,15 +843,15 @@ func (bav *UtxoView) _connectAccessGroupCreate(
 	if blockHeight >= bav.Params.ForkHeights.DeSoAccessGroupsBlockHeight {
 		// Set mappings for newlyMutedMembers
 		for _, newlyMutedMember := range newMuteList {
-			bav._setGroupMemberAttributeMapping(accessGroupEntry.GroupOwnerPublicKey,
-				accessGroupEntry.AccessGroupKeyName, newlyMutedMember.GroupMemberPublicKey,
-				AccessGroupMemberAttributeIsMuted, true, nil)
+			// Create enumeration key for this member.
+			enumerationKey := NewGroupEnumerationKey(accessGroupEntry.GroupOwnerPublicKey, accessGroupEntry.AccessGroupKeyName[:], newlyMutedMember.GroupMemberPublicKey)
+			bav._setGroupMemberAttributeMapping(enumerationKey, AccessGroupMemberAttributeIsMuted, NewAttributeEntry(true, nil))
 		}
 		// Set mappings for newlyUnmutedMembers
 		for _, newlyUnmutedMember := range newUnmuteList {
-			bav._setGroupMemberAttributeMapping(accessGroupEntry.GroupOwnerPublicKey,
-				accessGroupEntry.AccessGroupKeyName, newlyUnmutedMember.GroupMemberPublicKey,
-				AccessGroupMemberAttributeIsMuted, false, nil)
+			// Create enumeration key for this member.
+			enumerationKey := NewGroupEnumerationKey(accessGroupEntry.GroupOwnerPublicKey, accessGroupEntry.AccessGroupKeyName[:], newlyUnmutedMember.GroupMemberPublicKey)
+			bav._setGroupMemberAttributeMapping(enumerationKey, AccessGroupMemberAttributeIsMuted, NewAttributeEntry(false, nil))
 		}
 	}
 
@@ -1134,7 +1138,7 @@ func (bav *UtxoView) _disconnectAccessGroupMembers(
 			// If accessMember is not the same as the previous accessMember, return error.
 			if !reflect.DeepEqual(accessMember.GroupMemberPublicKey, prevAccessGroupMembers[ii].GroupMemberPublicKey) ||
 				!reflect.DeepEqual(accessMember.GroupMemberKeyName, prevAccessGroupMembers[ii].GroupMemberKeyName) ||
-				!reflect.DeepEqual(accessMember.EncryptedKey, prevAccessGroupMembers[ii].EncryptedKey) {
+				!bytes.Equal(accessMember.EncryptedKey, prevAccessGroupMembers[ii].EncryptedKey) {
 				return fmt.Errorf("_disconnectAccessGroupMembers: Trying to revert "+
 					"AccessGroupMembers but this member was already deleted: %v", accessMember.GroupMemberPublicKey)
 			}
@@ -1183,7 +1187,7 @@ func (bav *UtxoView) _connectAccessGroupAttributes(
 			"_connectBasicTransfer failed: ")
 	}
 
-	// switch case for whether attribute holder is member, group, or message.
+	// switch case for whether attribute holder is member or group.
 	switch txMeta.AttributeHolderKey.(type) {
 	case *GroupEnumerationKey:
 		// Make sure AttributeHolder is member
@@ -1194,8 +1198,8 @@ func (bav *UtxoView) _connectAccessGroupAttributes(
 		}
 
 		groupOwnerPublicKey := &txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupOwnerPublicKey
-		groupKeyName := &txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupKeyName
-		memberPublicKey := &txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupMemberPublicKey
+		//groupKeyName := &txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupKeyName
+		//memberPublicKey := &txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupMemberPublicKey
 
 		// TODO? Validate group public key and group key name.
 
@@ -1213,10 +1217,32 @@ func (bav *UtxoView) _connectAccessGroupAttributes(
 		case AccessGroupAttributeOperationTypeAdd:
 			// Note: Attribute could already be added, we don't check for that. We simply overwrite it as a change-attribute value mechanism.
 			// Add attribute to member.
-			bav._setGroupMemberAttributeMapping(groupOwnerPublicKey, groupKeyName, memberPublicKey, AccessGroupMemberAttributeType(txMeta.AttributeType), true, txMeta.AttributeValue)
+			bav._setGroupMemberAttributeMapping(txMeta.AttributeHolderKey.(*GroupEnumerationKey),
+				AccessGroupMemberAttributeType(txMeta.AttributeType), NewAttributeEntry(true, txMeta.AttributeValue))
+			utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
+				Type:                                  OperationTypeAccessGroupAttributes,
+				PrevAccessGroupAttributeHolder:        AccessGroupAttributeHolderMember,
+				PrevAttributeHolderKey:                txMeta.AttributeHolderKey.(*GroupEnumerationKey),
+				PrevAccessGroupAttributeOperationType: AccessGroupAttributeOperationTypeAdd,
+				PrevAttributeType:                     txMeta.AttributeType,
+				PrevAttributeValue:                    txMeta.AttributeValue,
+			})
 		case AccessGroupAttributeOperationTypeRemove:
 			// Set attribute to false.
-			bav._setGroupMemberAttributeMapping(groupOwnerPublicKey, groupKeyName, memberPublicKey, AccessGroupMemberAttributeType(txMeta.AttributeType), false, txMeta.AttributeValue)
+			bav._setGroupMemberAttributeMapping(txMeta.AttributeHolderKey.(*GroupEnumerationKey),
+				AccessGroupMemberAttributeType(txMeta.AttributeType), NewAttributeEntry(false, txMeta.AttributeValue))
+			utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
+				Type:                                  OperationTypeAccessGroupAttributes,
+				PrevAccessGroupAttributeHolder:        AccessGroupAttributeHolderMember,
+				PrevAttributeHolderKey:                txMeta.AttributeHolderKey.(*GroupEnumerationKey),
+				PrevAccessGroupAttributeOperationType: AccessGroupAttributeOperationTypeRemove,
+				PrevAttributeType:                     txMeta.AttributeType,
+				PrevAttributeValue:                    txMeta.AttributeValue,
+			})
+		default:
+			return 0, 0, nil, errors.Wrapf(
+				RuleErrorAccessGroupAttributesInvalidOperationType, "_connectAccessGroupAttributes: "+
+					"Invalid operation type for group member attribute")
 		}
 
 	case *AccessGroupKey:
@@ -1228,7 +1254,7 @@ func (bav *UtxoView) _connectAccessGroupAttributes(
 		}
 
 		groupOwnerPublicKey := &txMeta.AttributeHolderKey.(*AccessGroupKey).OwnerPublicKey
-		groupKeyName := &txMeta.AttributeHolderKey.(*AccessGroupKey).GroupKeyName
+		//groupKeyName := &txMeta.AttributeHolderKey.(*AccessGroupKey).GroupKeyName
 
 		// TODO? Validate group public key and group key name.
 
@@ -1245,21 +1271,38 @@ func (bav *UtxoView) _connectAccessGroupAttributes(
 		case AccessGroupAttributeOperationTypeAdd:
 			// Note: Attribute could already be added, we don't check for that. We simply overwrite it as a change-attribute value mechanism.
 			// Add attribute to group.
-			bav._setGroupEntryAttributeMapping(groupOwnerPublicKey, groupKeyName, AccessGroupEntryAttributeType(txMeta.AttributeType), true, txMeta.AttributeValue)
+			bav._setGroupEntryAttributeMapping(txMeta.AttributeHolderKey.(*AccessGroupKey),
+				AccessGroupEntryAttributeType(txMeta.AttributeType), NewAttributeEntry(true, txMeta.AttributeValue))
+			utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
+				Type:                                  OperationTypeAccessGroupAttributes,
+				PrevAccessGroupAttributeHolder:        AccessGroupAttributeHolderGroup,
+				PrevAttributeHolderKey:                txMeta.AttributeHolderKey.(*AccessGroupKey),
+				PrevAccessGroupAttributeOperationType: AccessGroupAttributeOperationTypeAdd,
+				PrevAttributeType:                     txMeta.AttributeType,
+				PrevAttributeValue:                    txMeta.AttributeValue,
+			})
 		case AccessGroupAttributeOperationTypeRemove:
 			// Set attribute to false.
-			bav._setGroupEntryAttributeMapping(groupOwnerPublicKey, groupKeyName, AccessGroupEntryAttributeType(txMeta.AttributeType), false, txMeta.AttributeValue)
+			bav._setGroupEntryAttributeMapping(txMeta.AttributeHolderKey.(*AccessGroupKey),
+				AccessGroupEntryAttributeType(txMeta.AttributeType), NewAttributeEntry(false, txMeta.AttributeValue))
+			utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
+				Type:                                  OperationTypeAccessGroupAttributes,
+				PrevAccessGroupAttributeHolder:        AccessGroupAttributeHolderGroup,
+				PrevAttributeHolderKey:                txMeta.AttributeHolderKey.(*AccessGroupKey),
+				PrevAccessGroupAttributeOperationType: AccessGroupAttributeOperationTypeRemove,
+				PrevAttributeType:                     txMeta.AttributeType,
+				PrevAttributeValue:                    txMeta.AttributeValue,
+			})
+		default:
+			return 0, 0, nil, errors.Wrapf(
+				RuleErrorAccessGroupAttributesInvalidOperationType, "_connectAccessGroupAttributes: "+
+					"Invalid operation type for group attribute")
 		}
 
 	default:
 		return 0, 0, nil, fmt.Errorf("_connectAccessGroupAttributes: called with bad AttributeHolderType: %v",
 			txMeta.AccessGroupAttributeHolder)
 	}
-
-	utxoOpsForTxn = append(utxoOpsForTxn, &UtxoOperation{
-		Type: OperationTypeAccessGroupAttributes,
-		// TODO add new fields to utxoOperation for AccessGroupAttributes
-	})
 
 	return totalInput, totalOutput, utxoOpsForTxn, nil
 }
@@ -1278,16 +1321,125 @@ func (bav *UtxoView) _disconnectAccessGroupAttributes(
 			"OperationTypeAccessGroupAttributes but found type %v and %v",
 			accessGroupAttributesOp.Type, operationType)
 	}
-
-	// Check that the transaction has the right TxnType.
-	if currentTxn.TxnMeta.GetTxnType() != TxnTypeAccessGroupAttributes {
-		return fmt.Errorf("_disconnectAccessGroupAttributes: called with bad TxnType %s",
-			currentTxn.TxnMeta.GetTxnType().String())
-	}
+	prevUtxoOp := utxoOpsForTxn[len(utxoOpsForTxn)-1]
 
 	// Get the transaction metadata.
 	txMeta := currentTxn.TxnMeta.(*AccessGroupAttributesMetadata)
-	_ = txMeta
-	// TODO rest of the logic
-	return nil
+
+	// Sanity checks
+	if txMeta.AccessGroupAttributeHolder != prevUtxoOp.PrevAccessGroupAttributeHolder {
+		return fmt.Errorf("_disconnectAccessGroupAttributes: AccessGroupAttributeHolder doesn't match: %v != %v",
+			txMeta.AccessGroupAttributeHolder, prevUtxoOp.PrevAccessGroupAttributeHolder)
+	}
+	if txMeta.AccessGroupAttributeOperationType != prevUtxoOp.PrevAccessGroupAttributeOperationType {
+		return fmt.Errorf("_disconnectAccessGroupAttributes: AccessGroupAttributeOperationType doesn't match: %v != %v",
+			txMeta.AccessGroupAttributeOperationType, prevUtxoOp.PrevAccessGroupAttributeOperationType)
+	}
+	if txMeta.AttributeType != prevUtxoOp.PrevAttributeType {
+		return fmt.Errorf("_disconnectAccessGroupAttributes: AttributeType doesn't match: %v != %v",
+			txMeta.AttributeType, prevUtxoOp.PrevAttributeType)
+	}
+	if !bytes.Equal(txMeta.AttributeValue, prevUtxoOp.PrevAttributeValue) {
+		return fmt.Errorf("_disconnectAccessGroupAttributes: AttributeValue doesn't match: %v != %v",
+			txMeta.AttributeValue, prevUtxoOp.PrevAttributeValue)
+	}
+
+	// switch case for whether attribute holder is member or group.
+	switch prevUtxoOp.PrevAttributeHolderKey.(type) {
+	case *GroupEnumerationKey:
+		// Make sure attribute holder is a member.
+		if prevUtxoOp.PrevAccessGroupAttributeHolder != AccessGroupAttributeHolderMember {
+			return fmt.Errorf("_disconnectAccessGroupAttributes: AttributeHolder is not member but attribute holder key is GroupEnumerationKey")
+		}
+
+		// Sanity checks for member attribute holder key.
+		prevEnumerationKey := prevUtxoOp.PrevAttributeHolderKey.(*GroupEnumerationKey)
+		groupOwnerPublicKey := prevEnumerationKey.GroupOwnerPublicKey
+		groupKeyName := prevEnumerationKey.GroupKeyName
+		memberPublicKey := prevEnumerationKey.GroupMemberPublicKey
+		if !reflect.DeepEqual(groupOwnerPublicKey, txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupOwnerPublicKey) {
+			return fmt.Errorf("_disconnectAccessGroupAttributes: GroupOwnerPublicKey doesn't match: %v != %v",
+				groupOwnerPublicKey, txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupOwnerPublicKey)
+		}
+		if !reflect.DeepEqual(groupKeyName, txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupKeyName) {
+			return fmt.Errorf("_disconnectAccessGroupAttributes: GroupKeyName doesn't match: %v != %v",
+				groupKeyName, txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupKeyName)
+		}
+		if !reflect.DeepEqual(memberPublicKey, txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupMemberPublicKey) {
+			return fmt.Errorf("_disconnectAccessGroupAttributes: GroupMemberPublicKey doesn't match: %v != %v",
+				memberPublicKey, txMeta.AttributeHolderKey.(*GroupEnumerationKey).GroupMemberPublicKey)
+		}
+
+		// switch case for whether operation type is add or remove.
+		switch prevUtxoOp.PrevAccessGroupAttributeOperationType {
+		case AccessGroupAttributeOperationTypeAdd:
+			if prevUtxoOp.PrevAccessGroupAttributeOperationType != AccessGroupAttributeOperationTypeAdd {
+				return fmt.Errorf("_disconnectAccessGroupAttributes: OperationType doesn't match: %v != %v",
+					prevUtxoOp.PrevAccessGroupAttributeOperationType, AccessGroupAttributeOperationTypeAdd)
+			}
+			// Delete the attribute from the member.
+			attributeEntry := NewAttributeEntry(true, prevUtxoOp.PrevAttributeValue)
+			bav._deleteGroupMemberAttributeMapping(prevEnumerationKey, AccessGroupMemberAttributeType(prevUtxoOp.PrevAttributeType), attributeEntry)
+		case AccessGroupAttributeOperationTypeRemove:
+			if prevUtxoOp.PrevAccessGroupAttributeOperationType != AccessGroupAttributeOperationTypeRemove {
+				return fmt.Errorf("_disconnectAccessGroupAttributes: OperationType doesn't match: %v != %v",
+					prevUtxoOp.PrevAccessGroupAttributeOperationType, AccessGroupAttributeOperationTypeRemove)
+			}
+			// Add the attribute back to the member.
+			attributeEntry := NewAttributeEntry(true, prevUtxoOp.PrevAttributeValue)
+			attributeEntry.isDeleted = false
+			bav._setGroupMemberAttributeMapping(prevEnumerationKey, AccessGroupMemberAttributeType(prevUtxoOp.PrevAttributeType), attributeEntry)
+		default:
+			return fmt.Errorf("_disconnectAccessGroupAttributes: OperationType is invalid: %v",
+				prevUtxoOp.PrevAccessGroupAttributeOperationType)
+		}
+	case *AccessGroupKey:
+		// Make sure attribute holder is a group.
+		if prevUtxoOp.PrevAccessGroupAttributeHolder != AccessGroupAttributeHolderGroup {
+			return fmt.Errorf("_disconnectAccessGroupAttributes: AttributeHolder is not group but attribute holder key is AccessGroupKey")
+		}
+
+		// Sanity checks for group attribute holder key.
+		prevAccessGroupKey := prevUtxoOp.PrevAttributeHolderKey.(*AccessGroupKey)
+		groupOwnerPublicKey := prevAccessGroupKey.OwnerPublicKey
+		groupKeyName := prevAccessGroupKey.GroupKeyName
+		if !reflect.DeepEqual(groupOwnerPublicKey, txMeta.AttributeHolderKey.(*AccessGroupKey).OwnerPublicKey) {
+			return fmt.Errorf("_disconnectAccessGroupAttributes: GroupOwnerPublicKey doesn't match: %v != %v",
+				groupOwnerPublicKey, txMeta.AttributeHolderKey.(*AccessGroupKey).OwnerPublicKey)
+		}
+		if !reflect.DeepEqual(groupKeyName, txMeta.AttributeHolderKey.(*AccessGroupKey).GroupKeyName) {
+			return fmt.Errorf("_disconnectAccessGroupAttributes: GroupKeyName doesn't match: %v != %v",
+				groupKeyName, txMeta.AttributeHolderKey.(*AccessGroupKey).GroupKeyName)
+		}
+
+		// switch case for whether operation type is add or remove.
+		switch prevUtxoOp.PrevAccessGroupAttributeOperationType {
+		case AccessGroupAttributeOperationTypeAdd:
+			if prevUtxoOp.PrevAccessGroupAttributeOperationType != AccessGroupAttributeOperationTypeAdd {
+				return fmt.Errorf("_disconnectAccessGroupAttributes: OperationType doesn't match: %v != %v",
+					prevUtxoOp.PrevAccessGroupAttributeOperationType, AccessGroupAttributeOperationTypeAdd)
+			}
+			// Delete the attribute from the group.
+			attributeEntry := NewAttributeEntry(true, prevUtxoOp.PrevAttributeValue)
+			bav._deleteGroupEntryAttributeMapping(prevAccessGroupKey, AccessGroupEntryAttributeType(prevUtxoOp.PrevAttributeType), attributeEntry)
+		case AccessGroupAttributeOperationTypeRemove:
+			if prevUtxoOp.PrevAccessGroupAttributeOperationType != AccessGroupAttributeOperationTypeRemove {
+				return fmt.Errorf("_disconnectAccessGroupAttributes: OperationType doesn't match: %v != %v",
+					prevUtxoOp.PrevAccessGroupAttributeOperationType, AccessGroupAttributeOperationTypeRemove)
+			}
+			// Add the attribute back to the group.
+			attributeEntry := NewAttributeEntry(true, prevUtxoOp.PrevAttributeValue)
+			attributeEntry.isDeleted = false
+			bav._setGroupEntryAttributeMapping(prevAccessGroupKey, AccessGroupEntryAttributeType(prevUtxoOp.PrevAttributeType), attributeEntry)
+		default:
+			return fmt.Errorf("_disconnectAccessGroupAttributes: OperationType is invalid: %v",
+				prevUtxoOp.PrevAccessGroupAttributeOperationType)
+		}
+	default:
+		return fmt.Errorf("_disconnectAccessGroupAttributes: AttributeHolderKey is not AccessGroupKey or GroupEnumerationKey")
+	}
+
+	// Now disconnect the basic transfer.
+	operationIndex := len(utxoOpsForTxn) - 1
+	return bav._disconnectBasicTransfer(currentTxn, txnHash, utxoOpsForTxn[:operationIndex], blockHeight)
 }

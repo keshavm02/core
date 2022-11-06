@@ -1,6 +1,9 @@
 package lib
 
-import "github.com/pkg/errors"
+import (
+	"github.com/golang/glog"
+	"github.com/pkg/errors"
+)
 
 // GetGroupEntryAttributeEntry returns the group entry attribute entry for the given group.
 func (bav *UtxoView) GetGroupEntryAttributeEntry(groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName,
@@ -22,28 +25,32 @@ func (bav *UtxoView) GetGroupEntryAttributeEntry(groupOwnerPublicKey *PublicKey,
 }
 
 // _setGroupEntryAttributeMapping sets the attribute status of a group.
-func (bav *UtxoView) _setGroupEntryAttributeMapping(groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName,
-	attributeType AccessGroupEntryAttributeType, isSet bool, value []byte) error {
-	// Create accessGroupKey key.
-	accessGroupKey := NewAccessGroupKey(groupOwnerPublicKey, groupKeyName[:])
+func (bav *UtxoView) _setGroupEntryAttributeMapping(accessGroupKey *AccessGroupKey,
+	attributeType AccessGroupEntryAttributeType, attributeEntry *AttributeEntry) error {
 	// Create mapping if it doesn't exist.
 	if _, exists := bav.GroupEntryAttributes[*accessGroupKey]; !exists {
 		bav.GroupEntryAttributes[*accessGroupKey] = make(map[AccessGroupEntryAttributeType]*AttributeEntry)
 	}
 	// Set attribute.
-	bav.GroupEntryAttributes[*accessGroupKey][attributeType] = NewAttributeEntry(isSet, value)
+	bav.GroupEntryAttributes[*accessGroupKey][attributeType] = attributeEntry
 	return nil
 }
 
 // _deleteGroupEntryAttributeMapping deletes the entry from the GroupEntryAttributes mapping to undo any changes to
 // attribute status in the current block.
-func (bav *UtxoView) _deleteGroupEntryAttributeMapping(groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName,
-	attributeType AccessGroupEntryAttributeType) error {
-	// Create accessGroupKey key.
-	accessGroupKey := NewAccessGroupKey(groupOwnerPublicKey, groupKeyName[:])
-	// Delete attribute if it exists.
-	if _, exists := bav.GroupEntryAttributes[*accessGroupKey]; exists {
-		delete(bav.GroupEntryAttributes[*accessGroupKey], attributeType)
+func (bav *UtxoView) _deleteGroupEntryAttributeMapping(accessGroupKey *AccessGroupKey,
+	attributeType AccessGroupEntryAttributeType, attributeEntry *AttributeEntry) error {
+
+	// This function shouldn't be called with nil pointers.
+	if attributeEntry == nil {
+		glog.Errorf("_deleteGroupEntryAttributeMapping: Called with nil pointer")
+		return nil
 	}
-	return nil
+
+	// Create tombstone entry and set isDeleted to true.
+	tombstoneEntry := *attributeEntry
+	tombstoneEntry.isDeleted = true
+
+	// Set attribute.
+	return bav._setGroupEntryAttributeMapping(accessGroupKey, attributeType, &tombstoneEntry)
 }

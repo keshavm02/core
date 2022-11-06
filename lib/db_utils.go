@@ -2143,8 +2143,9 @@ func DBGetAllAttributesForGroupMember(handle *badger.DB, snap *Snapshot,
 }
 
 // DBPutAttributeInGroupMemberAttributesIndexWithTxn for a given group.
-func DBPutAttributeInGroupMemberAttributesIndexWithTxn(txn *badger.Txn, snap *Snapshot, blockHeight uint64,
-	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, groupMemberPublicKey *PublicKey, attributeType AccessGroupMemberAttributeType, attributeValue []byte) error {
+func DBPutAttributeInGroupMemberAttributesIndexWithTxn(txn *badger.Txn, snap *Snapshot, groupOwnerPublicKey *PublicKey,
+	groupKeyName *GroupKeyName, groupMemberPublicKey *PublicKey, attributeType AccessGroupMemberAttributeType,
+	attributeEntry *AttributeEntry) error {
 
 	// Make sure group member attribute type is valid
 	if !IsAccessGroupMemberAttributeTypeValid(attributeType) {
@@ -2152,21 +2153,31 @@ func DBPutAttributeInGroupMemberAttributesIndexWithTxn(txn *badger.Txn, snap *Sn
 			"Invalid group member attribute type: %v", attributeType)
 	}
 
-	if err := DBSetWithTxn(txn, snap, _dbKeyForGroupMemberAttributesIndex(
-		groupOwnerPublicKey, groupKeyName, groupMemberPublicKey, attributeType), attributeValue); err != nil {
-
-		return errors.Wrapf(err, "DBPutAttributeInGroupMemberAttributesIndexWithTxn: "+
-			"problem adding attribute %v for group member %v", attributeType, groupMemberPublicKey)
+	// Make sure attribute entry is valid
+	if attributeEntry == nil {
+		return fmt.Errorf("DBPutAttributeInGroupMemberAttributesIndexWithTxn: " +
+			"Attribute entry cannot be nil")
 	}
 
-	return nil
+	// Get the key for the attribute.
+	key := _dbKeyForGroupMemberAttributesIndex(groupOwnerPublicKey, groupKeyName, groupMemberPublicKey, attributeType)
+
+	// If attribute is not set then delete the key.
+	if !attributeEntry.IsSet {
+		return DBDeleteWithTxn(txn, snap, key)
+	} else {
+		// If the attribute is set then set the value.
+		return DBSetWithTxn(txn, snap, key, attributeEntry.Value)
+	}
 }
 
 // DBPutAttributeInGroupMemberAttributesIndex for a given group.
 func DBPutAttributeInGroupMemberAttributesIndex(handle *badger.DB, snap *Snapshot, blockHeight uint64,
-	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, groupMemberPublicKey *PublicKey, attributeType AccessGroupMemberAttributeType, attributeValue []byte) error {
+	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, groupMemberPublicKey *PublicKey, attributeType AccessGroupMemberAttributeType,
+	attributeEntry *AttributeEntry) error {
+
 	return handle.Update(func(txn *badger.Txn) error {
-		return DBPutAttributeInGroupMemberAttributesIndexWithTxn(txn, snap, blockHeight, groupOwnerPublicKey, groupKeyName, groupMemberPublicKey, attributeType, attributeValue)
+		return DBPutAttributeInGroupMemberAttributesIndexWithTxn(txn, snap, groupOwnerPublicKey, groupKeyName, groupMemberPublicKey, attributeType, attributeEntry)
 	})
 }
 
@@ -2238,25 +2249,12 @@ func DBDeleteGroupMemberInGroupMemberAttributesIndexWithTxn(txn *badger.Txn, sna
 }
 
 // DBDeleteAttributeInGroupMemberAttributesIndexWithTxn deletes an attribute from the group member attributes index.
-func DBDeleteAttributeInGroupMemberAttributesIndexWithTxn(txn *badger.Txn, snap *Snapshot, blockHeight uint64,
-	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, groupMemberPublicKey *PublicKey, attributeType AccessGroupMemberAttributeType) error {
+func DBDeleteAttributeInGroupMemberAttributesIndexWithTxn(txn *badger.Txn, snap *Snapshot,
+	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, groupMemberPublicKey *PublicKey,
+	attributeType AccessGroupMemberAttributeType) error {
 
-	// Make sure group member attribute type is valid
-	if !IsAccessGroupMemberAttributeTypeValid(attributeType) {
-		return fmt.Errorf("DBDeleteAttributeInGroupMemberAttributesIndexWithTxn: "+
-			"Invalid group member attribute type: %v", attributeType)
-	}
-
-	// Get the key for the attribute.
-	key := _dbKeyForGroupMemberAttributesIndex(groupOwnerPublicKey, groupKeyName, groupMemberPublicKey, attributeType)
-
-	// Delete the key.
-	if err := DBDeleteWithTxn(txn, snap, key); err != nil {
-		return errors.Wrapf(err, "DBDeleteAttributeInGroupMemberAttributesIndexWithTxn: "+
-			"problem deleting key (%v)", key)
-	}
-
-	return nil
+	return DBPutAttributeInGroupMemberAttributesIndexWithTxn(txn, snap, groupOwnerPublicKey, groupKeyName,
+		groupMemberPublicKey, attributeType, NewAttributeEntry(false, nil))
 }
 
 // -------------------------------------------------------------------------------------
@@ -2324,7 +2322,7 @@ func DBGetAllAttributesForGroupEntry(handle *badger.DB, snap *Snapshot,
 
 // DBPutAttributeInGroupEntryAttributesIndexWithTxn for a given group.
 func DBPutAttributeInGroupEntryAttributesIndexWithTxn(txn *badger.Txn, snap *Snapshot, blockHeight uint32,
-	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, attributeType AccessGroupEntryAttributeType, attributeValue []byte) error {
+	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, attributeType AccessGroupEntryAttributeType, attributeEntry *AttributeEntry) error {
 
 	// Make sure group entry attribute type is valid
 	if !IsAccessGroupEntryAttributeTypeValid(attributeType) {
@@ -2332,21 +2330,32 @@ func DBPutAttributeInGroupEntryAttributesIndexWithTxn(txn *badger.Txn, snap *Sna
 			"Invalid group entry attribute type: %v", attributeType)
 	}
 
-	if err := DBSetWithTxn(txn, snap, _dbKeyForGroupEntryAttributesIndex(
-		groupOwnerPublicKey, groupKeyName, attributeType), attributeValue); err != nil {
-		return errors.Wrapf(err, "DBPutAttributeInGroupEntryAttributesIndexWithTxn: "+
-			"Problem putting attribute %v for group entry attributes index", attributeType)
+	// Make sure attribute entry is not nil
+	if attributeEntry == nil {
+		return fmt.Errorf("DBPutAttributeInGroupEntryAttributesIndexWithTxn: " +
+			"Attribute entry cannot be nil")
 	}
 
-	return nil
+	// Get the key for the group entry attributes index.
+	key := _dbKeyForGroupEntryAttributesIndex(groupOwnerPublicKey, groupKeyName, attributeType)
+
+	// If the attribute is not set then delete the key.
+	if !attributeEntry.IsSet {
+		return DBDeleteWithTxn(txn, snap, key)
+	} else {
+		// If the attribute is set the set the value.
+		return DBSetWithTxn(txn, snap, key, attributeEntry.Value)
+	}
 }
 
 // DBPutAttributeInGroupEntryAttributesIndex for a given group.
 func DBPutAttributeInGroupEntryAttributesIndex(handle *badger.DB, snap *Snapshot, blockHeight uint32,
-	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, attributeType AccessGroupEntryAttributeType, attributeValue []byte) error {
+	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, attributeType AccessGroupEntryAttributeType,
+	attributeEntry *AttributeEntry) error {
+
 	return handle.Update(func(txn *badger.Txn) error {
 		return DBPutAttributeInGroupEntryAttributesIndexWithTxn(txn, snap, blockHeight,
-			groupOwnerPublicKey, groupKeyName, attributeType, attributeValue)
+			groupOwnerPublicKey, groupKeyName, attributeType, attributeEntry)
 	})
 }
 
@@ -2419,25 +2428,11 @@ func DBDeleteGroupInGroupEntryAttributesIndexWithTxn(txn *badger.Txn, snap *Snap
 }
 
 // DBDeleteAttributeInGroupEntryAttributesIndexWithTxn for a given group.
-func DBDeleteAttributeInGroupEntryAttributesIndexWithTxn(txn *badger.Txn, snap *Snapshot, blockHeight uint64,
+func DBDeleteAttributeInGroupEntryAttributesIndexWithTxn(txn *badger.Txn, snap *Snapshot, blockHeight uint32,
 	groupOwnerPublicKey *PublicKey, groupKeyName *GroupKeyName, attributeType AccessGroupEntryAttributeType) error {
 
-	// Make sure group entry attribute type is valid
-	if !IsAccessGroupEntryAttributeTypeValid(attributeType) {
-		return fmt.Errorf("DBDeleteAttributeInGroupEntryAttributesIndexWithTxn: "+
-			"Invalid group entry attribute type: %v", attributeType)
-	}
-
-	// Get the key for the attribute.
-	key := _dbKeyForGroupEntryAttributesIndex(groupOwnerPublicKey, groupKeyName, attributeType)
-
-	// Delete the key.
-	if err := DBDeleteWithTxn(txn, snap, key); err != nil {
-		return errors.Wrapf(err, "DBDeleteAttributeInGroupEntryAttributesIndexWithTxn: "+
-			"problem deleting key (%v)", key)
-	}
-
-	return nil
+	return DBPutAttributeInGroupEntryAttributesIndexWithTxn(txn, snap, blockHeight,
+		groupOwnerPublicKey, groupKeyName, attributeType, NewAttributeEntry(false, nil))
 }
 
 // -------------------------------------------------------------------------------------
@@ -2626,6 +2621,22 @@ func DBPutDmMessageAttributeEntryInMessageEntryAttributesIndex(handle *badger.DB
 		return DBPutDmMessageAttributeEntryInMessageEntryAttributesIndexWithTxn(
 			txn, snap, dmMessageKey, messageAttributeType, attributeEntry)
 	})
+}
+
+// DBDeleteGroupChatMessageAttributeEntryInMessageEntryAttributesIndexWithTxn for a given GroupChatMessageKey.
+func DBDeleteGroupChatMessageAttributeEntryInMessageEntryAttributesIndexWithTxn(txn *badger.Txn, snap *Snapshot,
+	groupChatMessageKey GroupChatMessageKey, messageAttributeType MessageAttributeType) error {
+
+	return DBPutGroupChatMessageAttributeEntryInMessageEntryAttributesIndexWithTxn(
+		txn, snap, groupChatMessageKey, messageAttributeType, NewAttributeEntry(false, nil))
+}
+
+// DBDeleteDmMessageAttributeEntryInMessageEntryAttributesIndexWithTxn for a given DmMessageKey.
+func DBDeleteDmMessageAttributeEntryInMessageEntryAttributesIndexWithTxn(txn *badger.Txn, snap *Snapshot,
+	dmMessageKey DmMessageKey, messageAttributeType MessageAttributeType) error {
+
+	return DBPutDmMessageAttributeEntryInMessageEntryAttributesIndexWithTxn(
+		txn, snap, dmMessageKey, messageAttributeType, NewAttributeEntry(false, nil))
 }
 
 // -------------------------------------------------------------------------------------
@@ -2971,8 +2982,6 @@ func DEPRECATEDDBGetAllAccessGroupEntriesForMemberWithTxn(txn *badger.Txn, owner
 	return accessGroupEntries, nil
 }
 
-// Note this deletes the message for the sender *and* receiver since a mapping
-// should exist for each.
 // Deprecated
 func DEPRECATEDDBDeleteAccessGroupMemberMappingWithTxn(txn *badger.Txn, snap *Snapshot,
 	accessGroupMember *AccessGroupMember, accessGroupEntry *AccessGroupEntry) error {
@@ -2991,6 +3000,19 @@ func DEPRECATEDDBDeleteAccessGroupMemberMappingWithTxn(txn *badger.Txn, snap *Sn
 		return errors.Wrapf(err, "DEPRECATEDDBDeleteAccessGroupMemberMappingWithTxn: Deleting mapping for public key %v "+
 			"and access public key %v failed", accessGroupMember.GroupMemberPublicKey[:],
 			accessGroupEntry.AccessPublicKey[:])
+	}
+
+	return nil
+}
+
+// Deprecated
+func DEPRECATEDDBDeleteAccessGroupMembersMappingWithTxn(txn *badger.Txn, snap *Snapshot,
+	accessGroupMembers []*AccessGroupMember, accessGroupEntry *AccessGroupEntry) error {
+
+	for _, accessGroupMember := range accessGroupMembers {
+		if err := DEPRECATEDDBDeleteAccessGroupMemberMappingWithTxn(txn, snap, accessGroupMember, accessGroupEntry); err != nil {
+			return err
+		}
 	}
 
 	return nil

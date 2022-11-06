@@ -721,16 +721,28 @@ type UtxoOperation struct {
 	// For disconnecting AuthorizeDerivedKey transactions.
 	PrevDerivedKeyEntry *DerivedKeyEntry
 
-	// For disconnecting AccessGroup transactions.
-	PrevAccessKeyEntry     *AccessGroupEntry
+	// For disconnecting CreateAccessGroup transactions.
+	PrevAccessKeyEntry *AccessGroupEntry
+
+	// For disconnecting AccessGroupMembers transactions.
 	PrevAccessGroupMembers []*AccessGroupMember
 
-	// For disconnecting NewMessage transactions.
+	// For disconnecting AccessGroupAttributes/UpdateMessage transactions.
+	PrevAccessGroupAttributeHolder        AccessGroupAttributeHolder
+	PrevAttributeHolderKey                interface{}
+	PrevAccessGroupAttributeOperationType AccessGroupAttributeOperationType
+	PrevAttributeType                     byte
+	PrevAttributeValue                    []byte
+
+	// For disconnecting NewMessage/UpdateMessage transactions.
 	GroupChatMessagesKey GroupChatMessageKey
 	PrevDmThreadIndex    *MessageEntry
 	DmThreadKey          DmThreadKey
 	DmMessageIndexKey    DmMessageKey
 	MessageType          MessageType
+
+	// For disconnecting UpdateMessage transactions.
+	PrevMessageAttributeType MessageAttributeType
 
 	// Save the previous repost entry and repost count when making an update.
 	PrevRepostEntry *RepostEntry
@@ -2497,8 +2509,9 @@ func (key *GroupEntryAttributesKey) String() string {
 
 // AttributeEntry is used to store the status and value of an attribute
 type AttributeEntry struct {
-	IsSet bool
-	Value []byte
+	IsSet     bool
+	Value     []byte
+	isDeleted bool
 }
 
 func (entry *AttributeEntry) RawEncodeWithoutMetadata(blockHeight uint64, skipMetadata ...bool) []byte {
